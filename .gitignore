@@ -16,3 +16,15 @@ __pycache__/
 
 # Generated plans
 .agent/
+
+# Secrets & credentials
+.env.*
+*.pem
+*.key
+credentials.json
+google_token.json
+**/token.json
+**/client_secret*.json
+
+# State (regenerable)
+.claude/data/state/*.json
