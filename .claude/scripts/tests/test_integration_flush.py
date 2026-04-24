@@ -121,3 +121,57 @@ def test_dedup_prunes_entries_older_than_24h(tmp_path, monkeypatch):
     data = json.loads(state_path.read_text())
     assert "ancient" not in data["sessions"]
     assert "fresh" in data["sessions"]
+
+
+# ---------------------------------------------------------------------------
+# Daily log append
+# ---------------------------------------------------------------------------
+
+
+def test_append_daily_log_creates_file_with_header(tmp_path, monkeypatch):
+    import shared
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    fixed = datetime(2026, 4, 24, 14, 32, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    monkeypatch.setattr(shared, "pt_now", lambda: fixed)
+
+    daily_dir = tmp_path / "daily"
+    memory_flush.append_daily_log(
+        daily_dir=daily_dir,
+        session_id="abc123de45",
+        source="SessionEnd",
+        bullets="- Decided to prioritize landing page\n- Eric requested arch doc",
+    )
+
+    log_path = daily_dir / "2026-04-24.md"
+    content = log_path.read_text()
+    assert "# Daily Log — 2026-04-24" in content
+    assert "## 14:32 PT — Flush from SessionEnd (session abc123de)" in content
+    assert "- Decided to prioritize landing page" in content
+    assert content.rstrip().endswith("---")
+
+
+def test_append_daily_log_appends_to_existing(tmp_path, monkeypatch):
+    import shared
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    fixed = datetime(2026, 4, 24, 18, 5, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    monkeypatch.setattr(shared, "pt_now", lambda: fixed)
+
+    daily_dir = tmp_path / "daily"
+    daily_dir.mkdir()
+    existing = daily_dir / "2026-04-24.md"
+    existing.write_text("# Daily Log — 2026-04-24\n\nManual note from earlier.\n")
+
+    memory_flush.append_daily_log(
+        daily_dir=daily_dir,
+        session_id="newsess999",
+        source="PreCompact",
+        bullets="- New decision made",
+    )
+
+    content = existing.read_text()
+    assert content.startswith("# Daily Log — 2026-04-24")
+    assert "Manual note from earlier." in content
+    assert "## 18:05 PT — Flush from PreCompact (session newsess9)" in content
+    assert "- New decision made" in content
