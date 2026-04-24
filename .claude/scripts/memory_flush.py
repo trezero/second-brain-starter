@@ -171,3 +171,117 @@ def append_daily_log(daily_dir, session_id: str, source: str, bullets: str) -> N
         # Ensure exactly one blank line separates existing content from our section
         new_content = existing.rstrip() + "\n" + section
         shared.atomic_write(log_path, new_content)
+
+
+import asyncio
+
+CHUNK_THRESHOLD_TOKENS = 80_000   # single-pass below this
+CHUNK_SIZE_TOKENS = 50_000        # target max tokens per chunk when chunking
+MERGE_MARKER_NOTHING = "(nothing of note)"
+
+CURATOR_SYSTEM_PROMPT = (
+    "You are Jason's memory curator. Given a conversation transcript, extract "
+    "items worth saving to long-term memory: decisions made, commitments, "
+    "deadlines mentioned, project status changes (Persalto, MemeCoin, Solace "
+    "scholarships, legal/financial), lessons learned, and emotional state "
+    "observations. Output bullet points only — no preamble, no headers, one "
+    "bullet per line starting with `- `. Skip small talk, routine file "
+    "operations, and tool-use chatter. If nothing is worth saving, output "
+    "exactly the text `(nothing of note)`."
+)
+
+MERGE_SYSTEM_PROMPT = (
+    "You are Jason's memory curator. The following bullets were extracted "
+    "from sequential segments of a single long conversation. Merge them into "
+    "a single deduplicated bullet list, preserving chronological order where "
+    "it matters (e.g., a decision that was later reversed should show both). "
+    "Output bullets only, same format. If every input is `(nothing of note)`, "
+    "output `(nothing of note)`."
+)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Cheap token estimate: 4 chars ≈ 1 token."""
+    return max(1, len(text) // 4)
+
+
+def chunk_transcript(text: str, max_tokens_per_chunk: int = CHUNK_SIZE_TOKENS) -> list[str]:
+    """Split a load_transcript() rendering into chunks at message boundaries.
+
+    ``load_transcript`` joins messages with ``\\n\\n`` so we split on that.
+    Chunks respect ``max_tokens_per_chunk`` on a best-effort basis; a single
+    message larger than the limit is placed in its own chunk uncut.
+    """
+    if _estimate_tokens(text) <= max_tokens_per_chunk:
+        return [text]
+    messages = [m for m in text.split("\n\n") if m.strip()]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_tokens = 0
+    for msg in messages:
+        t = _estimate_tokens(msg)
+        if current and (current_tokens + t) > max_tokens_per_chunk:
+            chunks.append("\n\n".join(current))
+            current, current_tokens = [], 0
+        current.append(msg)
+        current_tokens += t
+    if current:
+        chunks.append("\n\n".join(current))
+    return chunks
+
+
+def _call_curator(prompt_text: str, model: str,
+                  system_prompt: str = CURATOR_SYSTEM_PROMPT) -> str:
+    """Run one Agent SDK query with no tools. Returns the concatenated text.
+
+    This is the only place memory_flush talks to the Anthropic API. Kept tiny
+    so tests can monkeypatch it cleanly.
+    """
+    # Re-assert recursion guard just before talking to the API.
+    os.environ["CLAUDE_INVOKED_BY"] = "memory_flush"
+    from claude_agent_sdk import ClaudeAgentOptions, query
+
+    async def _run():
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            model=model,
+            allowed_tools=[],
+        )
+        parts: list[str] = []
+        async for msg in query(prompt=prompt_text, options=options):
+            content = getattr(msg, "content", None)
+            if content is None:
+                continue
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    text = getattr(block, "text", None) or (
+                        block.get("text") if isinstance(block, dict) else None
+                    )
+                    if text:
+                        parts.append(text)
+        return "\n".join(p for p in parts if p).strip()
+
+    return shared.with_retry(lambda: asyncio.run(_run()))
+
+
+def summarize(transcript_text: str, model: str) -> str:
+    """Return a bullet list of memory-worthy items from ``transcript_text``.
+
+    Uses single-pass if small, chunk-then-merge if large. Returns
+    ``"(nothing of note)"`` if the curator decides nothing is memory-worthy.
+    """
+    tokens = _estimate_tokens(transcript_text)
+    if tokens <= CHUNK_THRESHOLD_TOKENS:
+        return _call_curator(transcript_text, model=model).strip() or MERGE_MARKER_NOTHING
+
+    chunks = chunk_transcript(transcript_text, max_tokens_per_chunk=CHUNK_SIZE_TOKENS)
+    per_chunk = [_call_curator(c, model=model).strip() for c in chunks]
+    if all(p == MERGE_MARKER_NOTHING or not p for p in per_chunk):
+        return MERGE_MARKER_NOTHING
+    joined = "\n\n".join(
+        f"--- Segment {i+1} ---\n{p}" for i, p in enumerate(per_chunk) if p
+    )
+    merged = _call_curator(joined, model=model, system_prompt=MERGE_SYSTEM_PROMPT).strip()
+    return merged or MERGE_MARKER_NOTHING
