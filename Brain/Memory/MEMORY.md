@@ -9,20 +9,21 @@
 
 ## Projects
 
-- **MemeCoin app** — deadline April 15. Primary build focus.
-- **New company launch** — landing page, investor narrative, business plan in progress.
-- **Solace scholarship execution** — tracking deadlines, submissions, and missing pieces.
+- **Persalto (new company)** — primary focus. Domain: persalto.io. Launch in progress. Team below.
+- **MemeCoin investor project** — active, unshipped. Goal: consistent profitability. Tools built; orchestration is the bottleneck. Daily 1–2× check for one concrete improvement.
+- **Solace scholarship app** — under construction. Will track scholarships Solace applies to; specifics loaded during a dedicated coding session.
 - **Legal/financial** — timeline and pointers only. NO substance here.
 
 ## People & Team
 
-- **Eric Salter** — role TBD
-- **Nicholas Kind** — role TBD
+- **Eric Salter** — Lead Developer → Persalto CTO. Backend/core. Distrusts AI tools; any code sent to him must be triple-checked — no empty functions, no broken references, no sloppy output.
+- **Nicholas Kind** — Persalto CEO. Fundraising, team management, company ops.
+- **Raj Patel** — UI/UX lead (backend-capable). Seed with ideas → he polishes and returns far better work. Give him clarity on taste.
 
 ## Family
 
-- **Anne** — wife
-- **Solace** (17) — Anne's stepdaughter. College and scholarship process active.
+- **Anne** — wife. `UCLA25bruin@gmail.com`. Surface always; never send on my behalf.
+- **Solace** (17) — daughter. `strawberriesapling@gmail.com`. College/scholarship process active.
 - **Dylan** (10)
 - **Vivi** (9)
 
