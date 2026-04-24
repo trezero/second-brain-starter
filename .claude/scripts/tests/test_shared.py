@@ -142,3 +142,69 @@ def test_with_retry_reraises_after_max_retries(monkeypatch):
         shared.with_retry(fn, max_retries=2, base_delay=0.001)
 
     assert calls["n"] == 3  # initial attempt + 2 retries
+
+
+# ---------------------------------------------------------------------------
+# file_lock (basic behavior; concurrency stress is in test_stress_file_lock.py)
+# ---------------------------------------------------------------------------
+
+
+def test_file_lock_creates_file_if_missing(tmp_path):
+    target = tmp_path / "new_lock"
+    assert not target.exists()
+    with shared.file_lock(target):
+        pass
+    assert target.exists()
+
+
+def test_file_lock_acquires_and_releases(tmp_path):
+    target = tmp_path / "lockme"
+    # First acquire/release
+    with shared.file_lock(target):
+        pass
+    # Second acquire should succeed immediately (lock was released)
+    t0 = time.monotonic()
+    with shared.file_lock(target, timeout=1.0):
+        pass
+    assert (time.monotonic() - t0) < 0.5
+
+
+def test_file_lock_times_out_when_held_by_another_process(tmp_path):
+    """Spawn a child that holds the lock for 2s; parent's attempt with
+    timeout=0.3 should raise TimeoutError in ~0.3s."""
+    import subprocess
+    import sys as _sys
+
+    target = tmp_path / "contended"
+    # Touch the file first so both processes lock the same existing inode
+    target.touch()
+
+    script = (
+        "import sys, time; sys.path.insert(0, {scripts!r}); import shared; "
+        "f = open({target!r}, 'r+'); "
+        "import fcntl; fcntl.flock(f, fcntl.LOCK_EX); "
+        "print('LOCKED', flush=True); time.sleep(2.0)"
+    ).format(
+        scripts=str(Path(shared.__file__).parent),
+        target=str(target),
+    )
+
+    child = subprocess.Popen(
+        [_sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        # Wait until the child signals it has acquired the lock
+        line = child.stdout.readline()
+        assert line.strip() == b"LOCKED"
+
+        t0 = time.monotonic()
+        with pytest.raises(TimeoutError):
+            with shared.file_lock(target, timeout=0.3, poll_interval=0.05):
+                pass
+        elapsed = time.monotonic() - t0
+        # Allow generous upper bound for CI jitter
+        assert 0.25 <= elapsed <= 1.5
+    finally:
+        child.kill()
+        child.wait()
