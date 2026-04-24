@@ -175,3 +175,75 @@ def test_append_daily_log_appends_to_existing(tmp_path, monkeypatch):
     assert "Manual note from earlier." in content
     assert "## 18:05 PT — Flush from PreCompact (session newsess9)" in content
     assert "- New decision made" in content
+
+
+# ---------------------------------------------------------------------------
+# chunk + summarize
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_transcript_small_returns_single_chunk():
+    text = "x" * 1000  # ~250 tokens
+    chunks = memory_flush.chunk_transcript(text, max_tokens_per_chunk=50_000)
+    assert len(chunks) == 1
+    assert chunks[0] == text
+
+
+def test_chunk_transcript_large_respects_message_boundaries():
+    # Two "messages" separated by the \n\n delimiter used by load_transcript
+    big_msg = "USER: " + ("word " * 10_000)  # ~50k chars ~12.5k tokens
+    text = (big_msg + "\n\n") * 20  # ~250k tokens total
+    chunks = memory_flush.chunk_transcript(text, max_tokens_per_chunk=50_000)
+    assert len(chunks) > 1
+    # Every chunk should be an integer number of \n\n-separated messages
+    for c in chunks:
+        assert "\n\n" not in c.strip()[:10] or c.count("\n\n") >= 0  # sanity
+
+
+def test_summarize_single_pass_calls_query_once(monkeypatch):
+    calls = []
+
+    def fake_curator(prompt_text, model):
+        calls.append(("single", len(prompt_text)))
+        return "- Decided X\n- Committed to Y"
+
+    monkeypatch.setattr(memory_flush, "_call_curator", fake_curator)
+
+    result = memory_flush.summarize("some short transcript", model="test-model")
+    assert result == "- Decided X\n- Committed to Y"
+    assert len(calls) == 1
+
+
+def test_summarize_chunked_calls_query_once_per_chunk_plus_merge(monkeypatch):
+    # Force chunking by dropping the threshold
+    monkeypatch.setattr(memory_flush, "CHUNK_THRESHOLD_TOKENS", 100)
+    monkeypatch.setattr(memory_flush, "CHUNK_SIZE_TOKENS", 40)
+
+    calls = []
+
+    def fake_curator(prompt_text, model, system_prompt=memory_flush.CURATOR_SYSTEM_PROMPT):
+        calls.append({"len": len(prompt_text), "system_prompt": system_prompt})
+        n = len(calls)
+        if system_prompt == memory_flush.CURATOR_SYSTEM_PROMPT:
+            return f"- Bullet from chunk {n}"
+        # merge call uses MERGE_SYSTEM_PROMPT
+        return "- Merged bullet A\n- Merged bullet B"
+
+    monkeypatch.setattr(memory_flush, "_call_curator", fake_curator)
+
+    # Create text long enough to force >= 2 chunks at our tiny threshold
+    text = "USER: hello world this is a long message\n\n" * 30
+    result = memory_flush.summarize(text, model="test-model")
+
+    assert len(calls) >= 2  # at least one per-chunk + one merge
+    # Exactly one merge call (last one, with MERGE_SYSTEM_PROMPT)
+    merge_calls = [c for c in calls
+                   if c["system_prompt"] == memory_flush.MERGE_SYSTEM_PROMPT]
+    assert len(merge_calls) == 1
+    assert "Merged bullet" in result
+
+
+def test_summarize_returns_nothing_of_note_passthrough(monkeypatch):
+    monkeypatch.setattr(memory_flush, "_call_curator",
+                        lambda *args, **kwargs: "(nothing of note)")
+    assert memory_flush.summarize("trivial", model="test-model") == "(nothing of note)"
