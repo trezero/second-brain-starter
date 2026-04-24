@@ -74,6 +74,50 @@ def with_retry(func, *, max_retries: int = 3, base_delay: float = 1.0,
             time.sleep(delay)
 
 
+@contextmanager
+def file_lock(path, timeout: float = 30.0, poll_interval: float = 0.1):
+    """Acquire an exclusive advisory lock on ``path``.
+
+    Creates the file (zero-byte) if it does not exist. Polls up to
+    ``timeout`` seconds for the lock, then raises ``TimeoutError``.
+
+    On Unix uses ``fcntl.flock`` with ``LOCK_EX | LOCK_NB``. On Windows
+    uses ``msvcrt.locking`` with ``LK_NBLCK``. Both are advisory — all
+    writers must cooperate by using this helper.
+    """
+    Path(path).touch(exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR)
+    deadline = time.monotonic() + timeout
+    acquired = False
+    try:
+        while True:
+            try:
+                if platform.system() == "Windows":  # pragma: no cover
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except (BlockingIOError, OSError) as e:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"file_lock timeout after {timeout}s on {path}"
+                    ) from e
+                time.sleep(poll_interval)
+        yield fd
+    finally:
+        try:
+            if acquired:
+                if platform.system() == "Windows":  # pragma: no cover
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def pt_now() -> datetime:
     """Current time in America/Los_Angeles (timezone-aware)."""
     return datetime.now(PT)
