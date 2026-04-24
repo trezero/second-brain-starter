@@ -74,3 +74,70 @@ def load_transcript(path) -> str:
         if text.strip():
             rendered.append(f"{role}: {text}")
     return "\n\n".join(rendered)
+
+
+from datetime import timedelta
+
+import shared
+
+
+def _load_state(state_path: Path) -> dict:
+    if not state_path.exists():
+        return {"sessions": {}}
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"sessions": {}}
+    data.setdefault("sessions", {})
+    return data
+
+
+def _prune_old_sessions(data: dict, now, ttl_hours: int = 24) -> None:
+    from datetime import datetime as _dt
+    cutoff = now - timedelta(hours=ttl_hours)
+    fresh = {}
+    for sid, entry in data.get("sessions", {}).items():
+        ts_raw = entry.get("last_flush_at")
+        if not ts_raw:
+            continue
+        try:
+            ts = _dt.fromisoformat(ts_raw)
+        except ValueError:
+            continue
+        if ts >= cutoff:
+            fresh[sid] = entry
+    data["sessions"] = fresh
+
+
+def check_and_update_dedup(state_path, session_id: str, source: str,
+                           window_seconds: int = 60) -> bool:
+    """Return True if this flush should proceed; False if suppressed by dedup.
+
+    On True, also records this flush's timestamp in the state file. Held under
+    a file lock so concurrent hook invocations for the same session race safely.
+    """
+    state_path = Path(state_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_suffix(state_path.suffix + ".lock")
+
+    now = shared.pt_now()
+    with shared.file_lock(lock_path, timeout=30.0):
+        data = _load_state(state_path)
+        _prune_old_sessions(data, now)
+
+        entry = data["sessions"].get(session_id)
+        if entry:
+            try:
+                from datetime import datetime as _dt
+                prev = _dt.fromisoformat(entry["last_flush_at"])
+            except (KeyError, ValueError):
+                prev = None
+            if prev is not None and (now - prev).total_seconds() < window_seconds:
+                return False
+
+        data["sessions"][session_id] = {
+            "last_flush_at": now.isoformat(),
+            "last_flush_source": source,
+        }
+        shared.atomic_write(state_path, json.dumps(data, indent=2))
+    return True
