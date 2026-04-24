@@ -2,6 +2,7 @@
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import time
 
 import pytest
 
@@ -64,3 +65,80 @@ def test_pt_today_str_uses_pt_date(monkeypatch):
 
     monkeypatch.setattr(shared, "datetime", FrozenDatetime)
     assert shared.pt_today_str() == "2026-04-23"
+
+
+# ---------------------------------------------------------------------------
+# with_retry
+# ---------------------------------------------------------------------------
+
+
+class _FakeApiError(Exception):
+    def __init__(self, status_code):
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+def test_with_retry_returns_immediately_on_success():
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        return "ok"
+
+    t0 = time.monotonic()
+    result = shared.with_retry(fn)
+    elapsed = time.monotonic() - t0
+
+    assert result == "ok"
+    assert calls["n"] == 1
+    assert elapsed < 0.5
+
+
+def test_with_retry_retries_on_429(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(shared.time, "sleep", lambda s: sleeps.append(s))
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _FakeApiError(429)
+        return "done"
+
+    result = shared.with_retry(fn, base_delay=0.01, max_retries=5)
+
+    assert result == "done"
+    assert calls["n"] == 3
+    assert len(sleeps) == 2
+    # Base delay 0.01, exponential: ~0.01 then ~0.02 (plus up to 10% jitter).
+    assert 0.009 <= sleeps[0] <= 0.012
+    assert 0.019 <= sleeps[1] <= 0.023
+
+
+def test_with_retry_does_not_retry_on_non_matching_exception(monkeypatch):
+    monkeypatch.setattr(shared.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise ValueError("not a transient api error")
+
+    with pytest.raises(ValueError):
+        shared.with_retry(fn)
+
+    assert calls["n"] == 1
+
+
+def test_with_retry_reraises_after_max_retries(monkeypatch):
+    monkeypatch.setattr(shared.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise _FakeApiError(503)
+
+    with pytest.raises(_FakeApiError):
+        shared.with_retry(fn, max_retries=2, base_delay=0.001)
+
+    assert calls["n"] == 3  # initial attempt + 2 retries
