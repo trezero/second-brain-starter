@@ -141,3 +141,33 @@ def check_and_update_dedup(state_path, session_id: str, source: str,
         }
         shared.atomic_write(state_path, json.dumps(data, indent=2))
     return True
+
+
+def append_daily_log(daily_dir, session_id: str, source: str, bullets: str) -> None:
+    """Append a sectioned flush block to today's daily log in ``daily_dir``.
+
+    Creates the file (with a top-level header) if it does not exist. The
+    append is held under a file lock so concurrent flushes do not interleave.
+    """
+    daily_dir = Path(daily_dir)
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    now = shared.pt_now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
+    log_path = daily_dir / f"{date_str}.md"
+    lock_path = log_path.with_suffix(log_path.suffix + ".lock")
+
+    short_sid = (session_id or "unknown")[:8]
+    section = (
+        f"\n## {time_str} PT — Flush from {source} (session {short_sid})\n\n"
+        f"{bullets.rstrip()}\n\n---\n"
+    )
+
+    with shared.file_lock(lock_path, timeout=30.0):
+        if log_path.exists():
+            existing = log_path.read_text(encoding="utf-8")
+        else:
+            existing = f"# Daily Log — {date_str}\n"
+        # Ensure exactly one blank line separates existing content from our section
+        new_content = existing.rstrip() + "\n" + section
+        shared.atomic_write(log_path, new_content)
