@@ -49,15 +49,21 @@ The output PRD should have:
 - Summary: 1-2 sentences based on their top tasks
 
 **Phase 1: Foundation (Memory Layer)**
-- Set up Obsidian vault (or their preferred notes app integration)
-- Create SOUL.md, USER.md, MEMORY.md, daily/ structure
+- Set up the memory vault folder using the name they specified in "Memory vault folder name" (e.g., `MyVault/Memory/`). Do NOT hardcode "Dynamous" — always use their chosen name.
+- If they're using Obsidian, mention it as the viewer; if not, note that the vault is just a folder of markdown files that works with any editor.
+- Create SOUL.md, USER.md, MEMORY.md, BOOTSTRAP.md, daily/ structure
+- BOOTSTRAP.md is a first-run onboarding script: on the user's very first Claude Code session, it drives an interactive conversation to personalize USER.md, SOUL.md, and HEARTBEAT.md (asks about name, timezone, role, communication style, integrations, proactivity preferences — one question at a time). It deletes itself after onboarding completes. If a session ends mid-onboarding, the file persists and picks up next time. The SessionStart hook should detect BOOTSTRAP.md and inject it into context.
+- Create **CLAUDE.md** at the repo root — this is Claude Code's project instruction file, loaded into every conversation. Initialize it with: project description, key paths (vault, scripts, hooks, skills, data directories), project conventions (timezone, advisor mode, no secrets in vault, checkbox syntax, YAML frontmatter), and a "Completed Phases" section to be updated after each phase. Also add a "Build Commands" section — start with placeholder entries and populate with real commands as each phase introduces them. This file is the agent's reference for how to interact with the project.
 - Customize each file based on their "About You" and "Memory Categories" answers
 - Key files to create, estimated complexity: Low
 
 **Phase 2: Hooks (Context Persistence)**
-- SessionStart hook (inject memory into every conversation)
-- PreCompact hook (save context before auto-compaction)
-- SessionEnd hook (save context on exit)
+- SessionStart hook (inject memory into every conversation — should also detect and inject BOOTSTRAP.md for first-run onboarding)
+- PreCompact hook (extract conversation context → spawn background `memory_flush.py`)
+- SessionEnd hook (same pattern — extract context → spawn background flush)
+- `memory_flush.py`: Background Agent SDK script spawned by PreCompact/SessionEnd. Uses Claude with `allowed_tools=[]` (pure reasoning, no tools) to intelligently decide what decisions, lessons, and facts from the conversation are worth saving. Writes bullet-point summary to daily log. Has deduplication and file locking. This is critical — without it, daily logs contain mechanical transcript excerpts instead of intelligent summaries that the daily reflection can actually promote to MEMORY.md.
+- **Hook recursion prevention**: Every Agent SDK session (heartbeat, reflection, chat, memory flush) must set `os.environ["CLAUDE_INVOKED_BY"] = "<name>"`. SessionEnd and PreCompact hooks check this env var and skip if set — this prevents Agent SDK exits from triggering additional flushes, which would cause duplicate log entries or infinite recursion.
+- **Shared utilities** (`shared.py`): Cross-platform file locking (`file_lock()` using `msvcrt` on Windows / `fcntl` on Unix) for concurrent write safety, retry with exponential backoff (`with_retry()`) for external API calls, and atomic state writes. Multiple processes (heartbeat, reflection, chat, flush) write to daily logs and state files concurrently — without file locking, they corrupt each other.
 - Key files, estimated complexity: Medium
 
 **Phase 3: Memory Search (Hybrid RAG)**
@@ -81,9 +87,9 @@ The output PRD should have:
 **Phase 6: Proactive Systems (Heartbeat + Reflection)**
 - Heartbeat: gather data from integrations → Claude reasons → notify
 - Set schedule based on their proactivity level
-- Daily reflection: promote important daily log items to MEMORY.md
+- Daily reflection: promote important daily log items to MEMORY.md. Must include **SOUL.md write-protection** — a PreToolUse hook that blocks the reflection agent from editing SOUL.md. If the reflection wants to suggest changes to the agent's identity or rules, it writes those suggestions to the daily log instead. This prevents "soul drift" where the agent gradually rewrites its own personality without user approval.
 - Map their proactivity level choice to specific heartbeat behaviors
-- **Draft management**: Heartbeat scans platforms for messages needing a reply, generates drafts in the user's voice (stored in `drafts/active/`), tracks lifecycle (active → sent → expired after 24h), uses RAG on `drafts/sent/` for voice-matching
+- **Draft management** (required for Advisor/Assistant/Partner proactivity levels): The heartbeat must implement a full draft lifecycle system. Specifically: (1) scan integration data for emails, DMs, and community posts needing a reply, (2) generate draft replies in the user's voice using RAG on `drafts/sent/` for voice-matching (`memory_search.py --path-prefix drafts/sent`), (3) write drafts as markdown files in `drafts/active/` with YAML frontmatter (type, source_id, recipient, subject, context, created, status) + Original Message + Draft Reply sections, (4) expire drafts >24h old with no action by moving to `drafts/expired/`, (5) detect when the user has actually replied on the platform and move the file to `drafts/sent/` capturing their real reply text. The heartbeat Agent SDK session needs Write/Edit tools to create draft files — read-only tools are insufficient. Drafting criteria should be defined in USER.md (what to draft, what to skip).
 - **Habits tracking**: HABITS.md with customizable pillars, auto-detection rules for objective achievements, daily reset by heartbeat, late-day nudges for unchecked pillars
 - Key files, estimated complexity: High
 
@@ -94,10 +100,11 @@ The output PRD should have:
 - Key files, estimated complexity: High
 
 **Phase 8: Security Hardening**
-- Sanitize all external data (3-layer defense)
+- **Credential protection hook** (`block-secrets.py`): PreToolUse hook that intercepts ALL file-access tools (Read, Bash, Grep, Edit, Write, Glob) and blocks access to .env files, API tokens, OAuth credentials, SSH keys, and other secrets. Also blocks Bash commands that would expose environment variables, and blocks writing scripts that would exfiltrate secrets to stdout. This is the most critical security component — without it, the LLM can accidentally read and expose every API key. Must be implemented as a separate, dedicated hook (not combined with the general command guard).
+- Sanitize all external data (3-layer defense: pattern detection → markdown escaping → XML trust boundaries)
 - Command guardrails based on their Security Boundaries answers
 - API key isolation (Python CLI wrapper pattern)
-- Key files, estimated complexity: Medium
+- Key files, estimated complexity: Medium-High
 
 **Phase 9: Deployment**
 - Based on their Infrastructure answers
@@ -111,6 +118,7 @@ The output PRD should have:
 - Dependencies (which phases must come first)
 - Estimated complexity (Low / Medium / High)
 - Personalization notes (how their specific answers shape this phase)
+- **CLAUDE.md update reminder**: Every phase must end by updating CLAUDE.md with any new paths, build commands, and conventions introduced. This keeps the agent's project reference current — if a command exists but isn't in CLAUDE.md, the agent won't know about it.
 
 **Footer:**
 - Recommended build order (phases are mostly sequential but some can parallel)
@@ -120,6 +128,8 @@ The output PRD should have:
 
 ## Personalization Rules
 
+- Use THEIR vault folder name everywhere in file paths (not "Dynamous" — use whatever they wrote in "Memory vault folder name"). For example, if they wrote "SecondBrain", all paths should be `SecondBrain/Memory/`, `SecondBrain/Memory/daily/`, etc.
+- If they are NOT using Obsidian, don't mention Obsidian in the PRD — just refer to the vault as a "memory vault" or "markdown folder". If they ARE using Obsidian, mention it as the viewer/editor.
 - Use THEIR platform names everywhere (not generic "email" — use "Gmail" if that's what they chose)
 - Map their proactivity level to concrete behaviors:
   - Observer → heartbeat notifications only, no drafting, no habit tracking
