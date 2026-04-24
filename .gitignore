@@ -28,3 +28,12 @@ google_token.json
 
 # State (regenerable)
 .claude/data/state/*.json
+
+# Python virtualenv
+.claude/.venv/
+
+# Flush outcome log (regenerable)
+.claude/data/state/flush.log
+
+# Keep the env template checked in
+!.env.example
