@@ -285,3 +285,131 @@ def summarize(transcript_text: str, model: str) -> str:
     )
     merged = _call_curator(joined, model=model, system_prompt=MERGE_SYSTEM_PROMPT).strip()
     return merged or MERGE_MARKER_NOTHING
+
+
+import argparse
+import sys
+
+STATE_REL_PATH = Path(".claude") / "data" / "state" / "flush-state.json"
+FLUSH_LOG_REL_PATH = Path(".claude") / "data" / "state" / "flush.log"
+DAILY_DIR_REL_PATH = Path("Brain") / "Memory" / "daily"
+
+
+def _log_outcome(log_path: Path, session_id: str, source: str,
+                 outcome: str, reason: str = "") -> None:
+    """Append one tab-separated line to flush.log. Best-effort; swallows errors."""
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        outcome_field = f"{outcome}: {reason}" if reason else outcome
+        line = "\t".join([
+            shared.pt_now().isoformat(),
+            session_id or "",
+            source or "",
+            outcome_field,
+        ]) + "\n"
+        # Append mode; locking not strictly needed (line-oriented), but take it anyway
+        lock_path = log_path.with_suffix(log_path.suffix + ".lock")
+        with shared.file_lock(lock_path, timeout=5.0):
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:  # noqa: BLE001 — logging must never raise
+        pass
+
+
+def _load_dotenv_if_present() -> None:
+    """Load a .env file from the current working directory if one exists."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=False)
+    except ImportError:
+        # Tiny fallback parser — only supports KEY=VALUE lines
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Second Brain memory flush")
+    parser.add_argument("--transcript", required=True)
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--source", required=True,
+                        choices=["PreCompact", "SessionEnd", "manual"])
+    args = parser.parse_args(argv)
+
+    # Recursion guard — set before any path that may import the SDK.
+    os.environ["CLAUDE_INVOKED_BY"] = "memory_flush"
+
+    _load_dotenv_if_present()
+
+    state_path = Path(STATE_REL_PATH)
+    log_path = Path(FLUSH_LOG_REL_PATH)
+    daily_dir = Path(DAILY_DIR_REL_PATH)
+
+    def log(outcome: str, reason: str = "") -> None:
+        _log_outcome(log_path, args.session_id, args.source, outcome, reason)
+
+    # Preflight: API key
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        log("skipped", "no_api_key")
+        return 0
+
+    # Preflight: SDK importable
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError:
+        log("skipped", "sdk_missing")
+        return 0
+
+    # Dedup window
+    try:
+        allowed = check_and_update_dedup(
+            state_path, args.session_id, args.source, window_seconds=60,
+        )
+    except TimeoutError:
+        log("errored", "state_lock_timeout")
+        return 0
+    if not allowed:
+        log("skipped", "dedup_window")
+        return 0
+
+    # Load transcript
+    transcript_text = load_transcript(args.transcript)
+    if not transcript_text:
+        log("skipped", "empty_transcript")
+        return 0
+
+    # Summarize
+    model = os.environ.get("SECOND_BRAIN_FLUSH_MODEL", "claude-sonnet-4-6")
+    try:
+        bullets = summarize(transcript_text, model=model)
+    except Exception as e:  # noqa: BLE001 — any API error becomes a log line
+        log("errored", f"curator_failed: {type(e).__name__}")
+        return 0
+
+    if bullets.strip() == MERGE_MARKER_NOTHING:
+        log("skipped", "nothing_of_note")
+        return 0
+
+    try:
+        append_daily_log(
+            daily_dir=daily_dir,
+            session_id=args.session_id,
+            source=args.source,
+            bullets=bullets,
+        )
+    except TimeoutError:
+        log("errored", "daily_log_lock_timeout")
+        return 0
+
+    log("success")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
