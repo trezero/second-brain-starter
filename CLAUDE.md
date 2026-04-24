@@ -32,7 +32,11 @@ and Google Workspace APIs.
 - Infrastructure: Ubuntu 22 WSL2 on Windows 10
 
 ## Build Commands
-(Updated after each phase)
+
+- `.claude/.venv/bin/python3 -m pytest .claude/scripts/tests/` — run Phase 2 test suite
+- `.claude/.venv/bin/python3 .claude/scripts/memory_flush.py --transcript <path> --session-id <id> --source manual` — run a flush manually against an existing transcript
+- `python3 -m venv .claude/.venv && .claude/.venv/bin/pip install -r .claude/scripts/requirements.txt` — (re)create the venv if deps drift or it was deleted
 
 ## Completed Phases
 - **Phase 1: Foundation** — Memory vault initialized at Brain/Memory/. SOUL.md, USER.md, MEMORY.md, BOOTSTRAP.md created. CLAUDE.md established. BOOTSTRAP.md ready for first-run onboarding.
+- **Phase 2: Hooks (Context Persistence)** — SessionStart/PreCompact/SessionEnd hooks wired in `.claude/settings.json`. `memory_flush.py` summarizes conversations via Agent SDK into daily logs (PT dates), with cross-platform file locking, 60s dedup window, and chunk-then-summarize for long transcripts. `shared.py` utilities covered by unit + contention-stress tests.
