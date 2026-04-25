@@ -40,3 +40,12 @@ Brain/Memory/daily/*.lock
 
 # Keep the env template checked in
 !.env.example
+.claude/plugins/
+.claude/skills/
+.claude/commands/
+.claude/archon-config.json
+.claude/archon-state.json
+.claude/archon-memory-buffer.jsonl
+.claude/settings.local.json
+.mcp.json
+.archon/
