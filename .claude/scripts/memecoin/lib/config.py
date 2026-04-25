@@ -38,6 +38,8 @@ class Config:
     telegram_bot_token: str
     telegram_chat_id: str
     flush_model: str
+    memecoin_database_url: str    # may be empty → P&L extractor reports as blocker
+    memecoin_user_id: str         # may be empty → P&L extractor reports as blocker
 
     @property
     def github_clone_url(self) -> str:
@@ -77,4 +79,6 @@ def load_config(env_path: Path | str | None = None) -> Config:
         telegram_bot_token=_require("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_require("TELEGRAM_CHAT_ID"),
         flush_model=os.environ.get("SECOND_BRAIN_FLUSH_MODEL", "claude-sonnet-4-6"),
+        memecoin_database_url=os.environ.get("DATABASE_URL_MEMECOIN", "").strip(),
+        memecoin_user_id=os.environ.get("MEMECOIN_USER_ID", "").strip(),
     )

@@ -28,6 +28,9 @@ class DailyRun:
     pnl_24h_pct: float | None = None
     pnl_prev_24h_usd: float | None = None
     portfolio_value_usd: float | None = None
+    cumulative_total_pnl_usd: float | None = None
+    cumulative_total_pnl_pct: float | None = None
+    open_positions: int | None = None
     primary_task: str | None = None
     outcome: str = "pending"             # success | partial | blocked | pending
     trello_card_url: str | None = None
@@ -114,6 +117,22 @@ def _blockers_html(run: DailyRun) -> list[str]:
     return [f"- {_html_escape(b)}" for b in run.blockers]
 
 
+def _cumulative_html(run: DailyRun) -> str:
+    if run.cumulative_total_pnl_usd is None:
+        return ""
+    pct_str = (f" ({_fmt_pct_html(run.cumulative_total_pnl_pct)})"
+               if run.cumulative_total_pnl_pct is not None else "")
+    return f"- Cumulative P&amp;L: {_fmt_money_html(run.cumulative_total_pnl_usd)}{pct_str}"
+
+
+def _cumulative_md(run: DailyRun) -> str:
+    if run.cumulative_total_pnl_usd is None:
+        return ""
+    pct_str = (f" ({_fmt_pct_md(run.cumulative_total_pnl_pct)})"
+               if run.cumulative_total_pnl_pct is not None else "")
+    return f"- Cumulative P&L: {_fmt_money_md(run.cumulative_total_pnl_usd)}{pct_str}"
+
+
 def format_telegram(run: DailyRun) -> str:
     """HTML payload for Telegram (parse_mode=HTML).
 
@@ -122,6 +141,19 @@ def format_telegram(run: DailyRun) -> str:
     which contain characters Telegram's Markdown parser refuses to balance.
     """
     primary = _html_escape(run.primary_task) if run.primary_task else "<i>pending</i>"
+    perf_lines = [
+        f"- 24h P&amp;L: {_fmt_money_html(run.pnl_24h_usd)} "
+        f"({_fmt_pct_html(run.pnl_24h_pct)})",
+        f"- Prev 24h: {_fmt_money_html(run.pnl_prev_24h_usd)}",
+        f"- Δ vs prev: {_delta_html(run)}",
+        f"- Portfolio: {_portfolio_html(run)}",
+    ]
+    cumulative = _cumulative_html(run)
+    if cumulative:
+        perf_lines.append(cumulative)
+    if run.open_positions is not None:
+        perf_lines.append(f"- Open positions: {run.open_positions}")
+
     lines = [
         f"<b>MemeCoin Daily — {_html_escape(run.date)}</b> "
         f"(run #{run.run_number}, <i>{_html_escape(run.mode)}</i>)",
@@ -130,11 +162,7 @@ def format_telegram(run: DailyRun) -> str:
         *_commits_html(run),
         "",
         "💰 <b>Performance</b>",
-        f"- 24h P&amp;L: {_fmt_money_html(run.pnl_24h_usd)} "
-        f"({_fmt_pct_html(run.pnl_24h_pct)})",
-        f"- Prev 24h: {_fmt_money_html(run.pnl_prev_24h_usd)}",
-        f"- Δ vs prev: {_delta_html(run)}",
-        f"- Portfolio: {_portfolio_html(run)}",
+        *perf_lines,
         "",
         f"🎯 <b>Today's task:</b> {primary}",
         f"✅ <b>Outcome:</b> {_html_escape(run.outcome)}",
@@ -147,6 +175,18 @@ def format_telegram(run: DailyRun) -> str:
 
 def format_markdown(run: DailyRun) -> str:
     """Markdown payload for Trello card descriptions and the vault daily log."""
+    perf_lines = [
+        f"- 24h P&L: {_fmt_money_md(run.pnl_24h_usd)} ({_fmt_pct_md(run.pnl_24h_pct)})",
+        f"- Prev 24h: {_fmt_money_md(run.pnl_prev_24h_usd)}",
+        f"- Δ vs prev: {_delta_md(run)}",
+        f"- Portfolio: {_portfolio_md(run)}",
+    ]
+    cumulative = _cumulative_md(run)
+    if cumulative:
+        perf_lines.append(cumulative)
+    if run.open_positions is not None:
+        perf_lines.append(f"- Open positions: {run.open_positions}")
+
     lines = [
         f"**MemeCoin Daily — {run.date}** (run #{run.run_number}, _{run.mode}_)",
         "",
@@ -154,10 +194,7 @@ def format_markdown(run: DailyRun) -> str:
         *_commits_md(run),
         "",
         "💰 **Performance**",
-        f"- 24h P&L: {_fmt_money_md(run.pnl_24h_usd)} ({_fmt_pct_md(run.pnl_24h_pct)})",
-        f"- Prev 24h: {_fmt_money_md(run.pnl_prev_24h_usd)}",
-        f"- Δ vs prev: {_delta_md(run)}",
-        f"- Portfolio: {_portfolio_md(run)}",
+        *perf_lines,
         "",
         f"🎯 **Today's task:** {run.primary_task or '_pending_'}",
         f"✅ **Outcome:** {run.outcome}",
