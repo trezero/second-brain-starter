@@ -35,5 +35,8 @@ google_token.json
 # Flush outcome log (regenerable)
 .claude/data/state/flush.log
 
+# Daily-log lock files (runtime artifacts from file_lock())
+Brain/Memory/daily/*.lock
+
 # Keep the env template checked in
 !.env.example
