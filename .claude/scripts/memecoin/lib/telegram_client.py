@@ -16,7 +16,7 @@ class TelegramClient:
         self._chat_id = chat_id
         self._timeout = timeout
 
-    def send_message(self, text: str, *, parse_mode: str = "Markdown",
+    def send_message(self, text: str, *, parse_mode: str = "HTML",
                      disable_web_page_preview: bool = True) -> dict:
         payload = {
             "chat_id": self._chat_id,
